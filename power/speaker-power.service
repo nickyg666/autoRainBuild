@@ -1,0 +1,10 @@
+[Unit]
+Description=Speaker Power Management
+After=bluetooth.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/speaker_power.sh
+
+[Install]
+WantedBy=multi-user.target

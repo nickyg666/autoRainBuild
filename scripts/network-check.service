@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Network Status and Manage Hotspot
+After=network-online.target network.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/orangepi/autoRain/scripts/check_network.sh
+
+[Install]
+WantedBy=multi-user.target

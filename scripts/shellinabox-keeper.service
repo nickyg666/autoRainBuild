@@ -1,0 +1,13 @@
+[Unit]
+Description=Keep Shellinabox Running Always
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/etc/init.d/shellinabox start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

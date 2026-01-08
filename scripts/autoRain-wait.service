@@ -1,0 +1,12 @@
+[Unit]
+Description=Wait for Device Connection
+After=bluetooth.target
+
+[Service]
+Type=simple
+ExecStart=/home/orangepi/autoRain/scripts/autoRain.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
