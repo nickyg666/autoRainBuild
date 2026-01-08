@@ -5,4 +5,4 @@ SHELLINABOX_DAEMON_START=1
 SHELLINABOX_PORT=4200
 
 # Options to pass to shellinaboxd daemon
-SHELLINABOX_ARGS="--no-beep --disable-ssl"
+SHELLINABOX_ARGS="--no-beep --disable-ssl --disable-ssl-menu --static-files /var/lib/shellinabox --service=/:LOGIN:orangepi:orangepi:HOME:/home/orangepi"

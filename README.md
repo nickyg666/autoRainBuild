@@ -489,6 +489,10 @@ Complete setup for an Orange Pi Zero 2 WiFi hotspot with shellinabox terminal as
 - Captive portal that redirects to shellinabox terminal
 - Automatic startup on boot
 - Version controlled with git
+- **Kid-friendly Python learning examples** (games, turtle art, adventures)
+- **Passwordless login** for easy access
+- **Welcome message** with quick-start guide
+- **Captive portal detection** for iOS, Android, and Windows
 
 ## System Requirements
 
@@ -499,14 +503,32 @@ Complete setup for an Orange Pi Zero 2 WiFi hotspot with shellinabox terminal as
 
 ## Installation
 
-### 1. Install Required Packages
+### Quick Install (Recommended)
+
+```bash
+cd autoRainBuild
+sudo ./install.sh
+```
+
+That's it! The script handles everything:
+- ✅ Installs all required packages
+- ✅ Configures shellinabox and nginx
+- ✅ Sets up WiFi hotspot
+- ✅ Configures captive portal detection
+- ✅ Sets up Python learning examples
+- ✅ Configures passwordless login
+- ✅ Shows welcome message on login
+
+### Manual Install (Advanced)
+
+#### 1. Install Required Packages
 
 ```bash
 sudo apt update
-sudo apt install -y git create_ap nginx shellinabox dnsmasq hostapd
+sudo apt install -y git create_ap nginx shellinabox dnsmasq hostapd python3-tk
 ```
 
-### 2. Configure Shellinabox (no SSL)
+#### 2. Configure Shellinabox (no SSL + autologin)
 
 ```bash
 sudo cp configs/shellinabox /etc/default/shellinabox
@@ -514,7 +536,7 @@ sudo systemctl restart shellinabox
 sudo systemctl enable shellinabox
 ```
 
-### 3. Configure Nginx Captive Portal
+#### 3. Configure Nginx Captive Portal
 
 ```bash
 sudo cp configs/captive-portal /etc/nginx/sites-available/
@@ -524,34 +546,47 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-### 4. Copy Shellinabox CSS Options
+#### 4. Copy Shellinabox CSS Options
 
 ```bash
 sudo cp -r configs/options-enabled /etc/shellinabox/
 ```
 
-### 5. Install Hotspot Service
+#### 5. Install Hotspot Service
 
 ```bash
 sudo cp configs/create-ap-hotspot.service /etc/systemd/system/
+cp scripts/setup-captive-portal-dns.sh /usr/local/bin/
+chmod +x /usr/local/bin/setup-captive-portal-dns.sh
 sudo systemctl daemon-reload
 sudo systemctl enable create-ap-hotspot.service
 ```
 
-### 6. Start Services
+#### 6. Setup Python Examples (Optional)
+
+```bash
+USER="orangepi"
+cp -r python-fun /home/$USER/
+chown -R $USER:$USER /home/$USER/python-fun
+cp scripts/welcome-message.sh /home/$USER/.welcome
+chown $USER:$USER /home/$USER/.welcome
+echo "/home/$USER/.welcome" >> /home/$USER/.bashrc
+```
+
+#### 7. Setup Passwordless Access (Optional)
+
+```bash
+USER="orangepi"
+sudo passwd -d $USER
+sudo cp configs/sudoers-nopass.template /etc/sudoers.d/$USER-nopass
+sed -i "s/orangepi/$USER/" /etc/sudoers.d/$USER-nopass
+sudo chmod 0440 /etc/sudoers.d/$USER-nopass
+```
+
+#### 8. Start Services
 
 ```bash
 sudo systemctl start create-ap-hotspot.service
-sudo systemctl status create-ap-hotspot.service
-```
-
-### 7. Configure Iptables (if not using iptables-persistent)
-
-The hotspot will configure iptables automatically, but you can make them persistent:
-
-```bash
-sudo apt install -y iptables-persistent
-# The rules are set by create_ap, so no need to manually add them
 ```
 
 ## Manual Start/Stop

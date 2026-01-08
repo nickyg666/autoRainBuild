@@ -1,0 +1,6 @@
+# Template for passwordless sudo for user
+# Copy to: /etc/sudoers.d/USERNAME-nopass
+# Then: sudo chmod 0440 /etc/sudoers.d/USERNAME-nopass
+# And: sudo visudo -c (to validate)
+
+orangepi ALL=(ALL) NOPASSWD: ALL
