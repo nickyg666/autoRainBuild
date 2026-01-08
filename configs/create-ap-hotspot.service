@@ -6,6 +6,7 @@ Wants=shellinabox.service
 [Service]
 Type=forking
 ExecStart=/usr/bin/create_ap wlan0 end0 jailbreakBox --no-virt --daemon
+ExecStartPost=/usr/local/bin/setup-captive-portal-dns.sh
 ExecStop=/usr/bin/create_ap --stop wlan0
 Restart=on-failure
 RestartSec=5

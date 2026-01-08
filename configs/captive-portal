@@ -4,6 +4,32 @@ server {
     
     server_name _;
     
+    # ==================== WINDOWS NCSI ====================
+    # Microsoft Network Connectivity Status Indicator
+    location = /connecttest.txt {
+        default_type text/plain;
+        return 200 "Microsoft NCSI\n";
+    }
+    
+    location = /ncsi.txt {
+        default_type text/plain;
+        return 200 "Microsoft NCSI\n";
+    }
+    
+    # ==================== ANDROID ====================
+    # Android captive portal detection - must return 204
+    location = /generate_204 {
+        return 204;
+    }
+    
+    # ==================== APPLE ====================
+    # Apple hotspot detect - redirect to shellinabox
+    location = /hotspot-detect.html {
+        rewrite ^(.*)$ / break;
+    }
+    
+    # ==================== SHELLINABOX ====================
+    # Everything else goes to shellinabox
     location / {
         proxy_pass http://127.0.0.1:4200/;
         proxy_set_header Host $host;
