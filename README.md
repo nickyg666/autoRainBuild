@@ -438,6 +438,28 @@ These are used by:
 - You can use them in your own scripts!
 - Just play: `mpg123 /home/orangepi/autoRain/audio/sounds/ready.mp3`
 
+## 🐛 Recent Fixes & Updates
+
+### Audio Path Fix (2026-01-08)
+**Problem:** autoRain.py couldn't access PulseAudio at boot time
+**Solution:** Updated PULSE_SERVER path from `/run/pulse/native` to `/run/user/1000/pulse/native`
+**Files Changed:**
+- `autoRain.py` - All audio functions now use correct PulseAudio socket path
+
+**What this fixes:**
+- Audio playback works when autoRain starts at boot
+- Bluetooth speaker audio playback now works reliably
+- No more "audio failed to play" errors in logs
+
+### User Configuration (2026-01-08)
+**Users created:**
+- `orangepi` - Default user, password: `orangepi`
+- `lorenzo` - Admin user with full sudo access, no password required
+
+**Why two users?**
+- `orangepi` is the default system user for normal operations
+- `lorenzo` is for administrative tasks (sudo NOPASSWD: ALL)
+
 ## 📦 Installing Audio Packages
 
 Audio packages available in `audio/install.sh`:
