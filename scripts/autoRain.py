@@ -1,6 +1,8 @@
 #!/bin/bash
 # autoRain.py - Main system workflow handler
 
+AUDIO_DIR="/home/orangepi/autoRain/audio/sounds"
+READY_SOUND="$AUDIO_DIR/ready.mp3"
 BLUETOOTH_CHECK="/usr/local/bin/check_bluetooth.sh"
 AUTOLOGIN_SCRIPT="/home/orangepi/.auto_login"
 

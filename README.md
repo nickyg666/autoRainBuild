@@ -422,3 +422,36 @@ Use as you wish! Build whatever you want!
 ---
 
 **Made for builders of all ages who want to understand their computers**
+
+## 🔊 Audio Files Included
+
+The following MP3 sounds are included in `audio/sounds/`:
+- **ready.mp3** - "Ready to code!" sound (plays when device connects)
+- **step1.mp3** - Step 1 completion sound
+- **step2.mp3** - Step 2 completion sound
+- **complete.mp3** - "All done!" celebration sound
+- **retry.mp3** - "Try again!" encouragement sound
+- **shutdown.mp3** - System shutdown sound
+
+These are used by:
+- `autoRain.py` - Plays ready.mp3 when device connects
+- You can use them in your own scripts!
+- Just play: `mpg123 /home/orangepi/autoRain/audio/sounds/ready.mp3`
+
+## 📦 Installing Audio Packages
+
+Audio packages available in `audio/install.sh`:
+- pulseaudio (main audio system)
+- pulseaudio-utils (control tools: pactl, pacmd)
+- alsa-utils (aplay, speaker-test)
+- alsa-base (low-level audio tools)
+- beep (simple beep sounds)
+- bluez (Bluetooth audio)
+- bluez-tools (bluetoothctl control)
+
+**Note:** This is a COPY script - shows what to install, doesn't actually install.
+To install packages, run the script yourself or use:
+```bash
+sudo apt install -y pulseaudio pulseaudio-utils alsa-utils alsa-base beep bluez bluez-tools pulseaudio-module-bluetooth
+```
+
