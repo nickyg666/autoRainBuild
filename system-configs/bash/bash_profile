@@ -1,0 +1,65 @@
+#!/bin/bash
+export PATH="/usr/sbin:/sbin:/home/orangepi:/usr/local/sbin:/home/orangepi/.opencode/bin:$PATH"
+
+# XDG Base Directory Specification
+export XDG_CONFIG_HOME="$HOME/.config"
+export XDG_DATA_HOME="$HOME/.local/share"
+export XDG_STATE_HOME="$HOME/.local/state"
+export XDG_RUNTIME_DIR="/run/user/1000"
+
+# PipeWire custom build paths
+export SPA_PLUGIN_DIR="/home/orangepi/pipewire/build/spa/plugins"
+export PIPEWIRE_MODULE_DIR="/home/orangepi/pipewire/build/src/modules"
+export SPA_DATA_DIR="/home/orangepi/pipewire/build/spa"
+export LD_LIBRARY_PATH="/home/orangepi/pipewire/build/src/pipewire:/home/orangepi/pipewire/build/subprojects/wireplumber/lib/wp:$LD_LIBRARY_PATH"
+export WIREPLUMBER_MODULE_DIR="/home/orangepi/pipewire/build/subprojects/wireplumber/modules"
+export WIREPLUMBER_DATA_DIR="/home/orangepi/pipewire/build/subprojects/wireplumber/data"
+export WIREPLUMBER_CONFIG_DIR="/home/orangepi/pipewire/subprojects/wireplumber/src/config"
+
+# DBus session
+export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/1000/bus"
+
+# Only auto-start on local console (not SSH)
+if [[ -z "$SSH_CONNECTION" ]] && [[ "$(tty)" == "/dev/tty1" ]]; then
+  # Start PipeWire and wait for it to be ready
+  systemctl --user start pipewire wireplumber &
+  
+  # Start Bluetooth service early for faster connection
+  sudo systemctl restart bluetooth &
+  
+  # Robust prevention of double-run
+  PIDFILE="/tmp/autorain.pid"
+  LOCK="/tmp/autorain.lock"
+  
+  # Check if already running via PID file
+  if [ -f "$PIDFILE" ]; then
+    PID=$(cat "$PIDFILE")
+    if kill -0 "$PID" 2>/dev/null; then
+      echo "autoRain already running (PID: $PID)"
+      exit 0
+    else
+      # Stale PID file, remove it
+      rm -f "$PIDFILE"
+    fi
+  fi
+  
+  # Check if tmux session already exists
+  if tmux has-session -t palera1n 2>/dev/null; then
+    echo "autoRain tmux session already exists"
+    exit 0
+  fi
+  
+  # Create lock file with our PID
+  echo $$ > "$PIDFILE"
+  touch "$LOCK"
+  
+  # Give PipeWire time to initialize
+  sleep 0.2
+  
+  # Start script via tmux for proper session management
+  tmux new-session -d -s palera1n -c /home/orangepi \
+    "/usr/bin/python3 /home/orangepi/autoRain.py"
+  
+  # Clean up lock file but keep PID file for process tracking
+  rm -f "$LOCK"
+fi
