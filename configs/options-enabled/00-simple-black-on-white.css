@@ -1,0 +1,17 @@
+/* Simple black on white theme for shellinabox */
+body {
+    background-color: #000000;
+    color: #ffffff;
+    font-family: monospace;
+    font-size: 14px;
+}
+
+#vt100 .reverse-video {
+    background-color: #ffffff;
+    color: #000000;
+}
+
+#vt100 .cursor {
+    background-color: #00ff00;
+    color: #000000;
+}

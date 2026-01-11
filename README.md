@@ -477,3 +477,178 @@ To install packages, run the script yourself or use:
 sudo apt install -y pulseaudio pulseaudio-utils alsa-utils alsa-base beep bluez bluez-tools pulseaudio-module-bluetooth
 ```
 
+=======
+# autoRainBuild - Hotspot with Shellinabox Captive Portal
+
+Complete setup for an Orange Pi Zero 2 WiFi hotspot with shellinabox terminal as a captive portal.
+
+## Features
+
+- WiFi hotspot with SSID "jailbreakBox" (open network, no password)
+- Automatic internet sharing from ethernet connection (end0)
+- Captive portal that redirects to shellinabox terminal
+- Automatic startup on boot
+- Version controlled with git
+
+## System Requirements
+
+- Orange Pi Zero 2 (or similar SBC)
+- WiFi adapter (wlan0)
+- Ethernet connection (end0) for internet sharing
+- Debian-based Linux (tested on Armbian)
+
+## Installation
+
+### 1. Install Required Packages
+
+```bash
+sudo apt update
+sudo apt install -y git create_ap nginx shellinabox dnsmasq hostapd
+```
+
+### 2. Configure Shellinabox (no SSL)
+
+```bash
+sudo cp configs/shellinabox /etc/default/shellinabox
+sudo systemctl restart shellinabox
+sudo systemctl enable shellinabox
+```
+
+### 3. Configure Nginx Captive Portal
+
+```bash
+sudo cp configs/captive-portal /etc/nginx/sites-available/
+sudo rm /etc/nginx/sites-enabled/default
+sudo ln -s /etc/nginx/sites-available/captive-portal /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+### 4. Copy Shellinabox CSS Options
+
+```bash
+sudo cp -r configs/options-enabled /etc/shellinabox/
+```
+
+### 5. Install Hotspot Service
+
+```bash
+sudo cp configs/create-ap-hotspot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable create-ap-hotspot.service
+```
+
+### 6. Start Services
+
+```bash
+sudo systemctl start create-ap-hotspot.service
+sudo systemctl status create-ap-hotspot.service
+```
+
+### 7. Configure Iptables (if not using iptables-persistent)
+
+The hotspot will configure iptables automatically, but you can make them persistent:
+
+```bash
+sudo apt install -y iptables-persistent
+# The rules are set by create_ap, so no need to manually add them
+```
+
+## Manual Start/Stop
+
+```bash
+# Start hotspot
+sudo systemctl start create-ap-hotspot.service
+
+# Stop hotspot  
+sudo systemctl stop create-ap-hotspot.service
+
+# Check status
+sudo systemctl status create-ap-hotspot.service
+
+# List connected clients
+sudo create_ap --list-clients wlan0
+
+# View logs
+sudo journalctl -u create-ap-hotspot.service -f
+```
+
+## Configuration Details
+
+### Hotspot Network
+- **SSID:** jailbreakBox
+- **Gateway:** 192.168.12.1
+- **DHCP Range:** 192.168.12.1 - 192.168.12.254
+- **WiFi Interface:** wlan0
+- **Internet Source:** end0 (ethernet)
+
+### Captive Portal
+- **Port:** HTTP 80 (redirects to nginx)
+- **Nginx Port:** 80 (proxies to shellinabox)
+- **Shellinabox Port:** 4200 (HTTP only, no SSL)
+- **Target:** Terminal login prompt
+
+### Services
+- `create-ap-hotspot.service` - Manages WiFi hotspot
+- `shellinabox.service` - Provides web-based terminal
+- `nginx.service` - Proxies HTTP to shellinabox
+
+## Troubleshooting
+
+### Hotspot not visible
+```bash
+sudo rfkill unblock wifi
+sudo systemctl restart create-ap-hotspot.service
+```
+
+### Captive portal not working
+```bash
+sudo systemctl status shellinabox
+sudo systemctl status nginx
+curl http://127.0.0.1/  # Test locally
+```
+
+### Clients not getting internet
+```bash
+sudo iptables -t nat -L -n -v  # Check NAT rules
+sudo systemctl restart create-ap-hotspot.service
+```
+
+### Check wireless interface
+```bash
+iw dev  # Should show wlan0 as AP mode
+ip addr show wlan0  # Should show 192.168.12.1/24
+```
+
+## File Locations
+
+- `/etc/default/shellinabox` - Shellinabox daemon configuration
+- `/etc/nginx/sites-available/captive-portal` - Nginx captive portal config
+- `/etc/systemd/system/create-ap-hotspot.service` - Hotspot systemd service
+- `/etc/shellinabox/options-enabled/` - CSS themes for terminal
+
+## Notes
+
+- The hotspot is configured as an open network (no password)
+- Internet is automatically shared from ethernet when connected
+- Windows devices should show a captive portal popup automatically
+- SSH access to the terminal is also available on port 22
+- The captive portal provides a full shell via web browser
+
+## Development
+
+To contribute changes:
+
+1. Make changes to config files
+2. Test locally
+3. Update this README if needed
+4. Commit changes with git
+
+```bash
+git add .
+git commit -m "Description of changes"
+```
+
+## License
+
+Use as you wish.
