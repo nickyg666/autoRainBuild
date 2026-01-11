@@ -1,0 +1,15 @@
+[Unit]
+Description=JailbreakBox System Manager - Unified AP/WiFi/LED Controller
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/home/orangepi/jailbreakbox-manager.sh start
+ExecStop=/home/orangepi/jailbreakbox-manager.sh stop
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

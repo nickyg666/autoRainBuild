@@ -11,7 +11,8 @@ WIFI_INTERFACE="wlan0"
 ETHERNET_INTERFACE="end0"
 AP_SSID="jailbreakBox"
 AP_IP="10.42.0.1"
-STARTUP_DELAY=30
+STARTUP_DELAY=60
+NETWORK_MANAGER_WAIT=60
 KNOWN_WIFI_SSID="lasagna|IoT|Service|gamestream"
 
 # LED GPIO pins
@@ -211,7 +212,8 @@ connect_wifi() {
 network_monitor() {
     log "Starting network monitor"
     
-    local current_mode="unknown"
+    local current_mode="initial"
+    local initial_wait_complete=false
     
     while true; do
         if is_wifi_connected; then
@@ -221,6 +223,7 @@ network_monitor() {
                 chase_rainbow
                 echo "wifi" > "$STATE_FILE"
                 current_mode="wifi"
+                initial_wait_complete=true
             fi
         
         elif is_hostapd_running; then
@@ -230,6 +233,7 @@ network_monitor() {
                 pulse_green
                 echo "hotspot" > "$STATE_FILE"
                 current_mode="hotspot"
+                initial_wait_complete=true
             fi
         
         else
@@ -242,11 +246,25 @@ network_monitor() {
                 current_mode="off"
             fi
         
-            # Try to connect to WiFi
-            if is_known_wifi_connected; then
-                connect_wifi
+            if [ "$initial_wait_complete" = true ]; then
+                # Try to connect to WiFi
+                if is_known_wifi_connected; then
+                    connect_wifi
+                else
+                    start_ap
+                fi
             else
-                start_ap
+                # Initial wait period - let NetworkManager handle it
+                log "Initial wait period: letting NetworkManager handle wlan0 (mode: off, waiting $NETWORK_MANAGER_WAIT seconds)"
+            fi
+        fi
+        
+        # Check if initial wait period is complete
+        if [ "$initial_wait_complete" = false ]; then
+            if [ -f "$PID_DIR/startup_complete" ]; then
+                initial_wait_complete=true
+                log "Initial wait period complete - AP mode now available"
+                rm -f "$PID_DIR/startup_complete"
             fi
         fi
         
@@ -263,19 +281,40 @@ case "$1" in
         log "=== Starting JailbreakBox Manager ==="
         init_dirs
         
-        pkill -f "jailbreakbox-manager.sh" 2>/dev/null || true
+        # Only kill other instances if monitor PID file exists and process is running
+        if [ -f "$PID_DIR/monitor.pid" ]; then
+            OLD_PID=$(cat "$PID_DIR/monitor.pid" 2>/dev/null)
+            if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+                log "Stopping old instance (PID: $OLD_PID)"
+                kill "$OLD_PID" 2>/dev/null || true
+                sleep 2
+            fi
+        fi
         
         stop_pulse_green
         stop_chase_rainbow
         leds_all_off
         
-        sleep $STARTUP_DELAY
+        log "Waiting $NETWORK_MANAGER_WAIT seconds for NetworkManager to handle wlan0..."
+        log "During this time, wlan0 remains managed by NetworkManager"
         
+        # Start network monitor in background (in initial wait mode)
         network_monitor &
         MONITOR_PID=$!
         echo $MONITOR_PID > "$PID_DIR/monitor.pid"
         log "Network monitor started (PID: $MONITOR_PID)"
+        
+        # Wait for NetworkManager to handle connections
+        sleep $NETWORK_MANAGER_WAIT
+        
+        # Mark startup complete so AP mode becomes available
+        touch "$PID_DIR/startup_complete"
+        log "Startup wait complete - AP mode now available"
+        
+        # Keep this process alive (wait for network_monitor to finish)
+        wait $MONITOR_PID
         ;;
+    
     
     stop)
         log "=== Stopping JailbreakBox Manager ==="
