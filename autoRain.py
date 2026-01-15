@@ -1,4 +1,15 @@
 #!/usr/bin/env python3
+"""
+autoRain - Automated iOS Jailbreak System for Orange Pi Zero 2
+
+Boot chain: getty@tty1 (autologin) -> .bash_profile -> autoRain.py
+
+Features:
+- Bluetooth speaker connection with power cycle recovery
+- Audio prompts for DFU steps
+- LED visual feedback via led_controller
+- pexpect-based palera1n automation
+"""
 
 import subprocess
 import time
@@ -8,6 +19,9 @@ import os
 import logging
 import atexit
 import threading
+
+# Add script directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ================= LOGGING =================
 
@@ -24,432 +38,475 @@ logging.basicConfig(
 
 log = logging.getLogger("autorain")
 
-# ================= ENV =================
+# ================= LED CONTROLLER =================
 
-os.environ["PATH"] = (
-    "/usr/sbin:/sbin:/usr/local/sbin:/home/orangepi:" + os.environ.get("PATH", "")
-)
+LED_AVAILABLE = False
+led = None
+
+try:
+    import led_controller as led
+    LED_AVAILABLE = True
+    log.info("[led] LED controller loaded")
+except ImportError as e:
+    log.warning(f"[led] LED controller not available: {e}")
+
+
+def led_call(func_name, *args, **kwargs):
+    """Safely call LED function."""
+    if not LED_AVAILABLE or led is None:
+        return
+    try:
+        func = getattr(led, func_name, None)
+        if func:
+            func(*args, **kwargs)
+    except Exception as e:
+        log.debug(f"[led] {func_name} error: {e}")
+
+
+# ================= ENVIRONMENT =================
+
+os.environ["PATH"] = "/usr/sbin:/sbin:/usr/local/sbin:/home/orangepi:" + os.environ.get("PATH", "")
 os.environ["PULSE_SERVER"] = "unix:/run/user/1000/pulse/native"
 
 # ================= CONFIG =================
 
-BT_DEVICE = "11:81:AA:11:88:72"
-BT_RECOVERY_INTERVAL = 6
-BT_CHECK_INTERVAL = 2
-AUDIO_PATH = "/home/orangepi"
-BT_TIMEOUT = 30
-SPEAKER_POWER = "/usr/local/bin/speaker-power.sh"
+BT_MAC = "11:81:AA:11:88:72"
+BT_TIMEOUT = 60  # Max seconds to wait for BT
+SPEAKER_POWER_SCRIPT = "/usr/local/bin/speaker-power.sh"
+
+AUDIO_DIR = "/home/orangepi/autoRain/audio/sounds"
+READY_MP3 = f"{AUDIO_DIR}/ready.mp3"
+STEP1_MP3 = f"{AUDIO_DIR}/step1.mp3"
+STEP2_MP3 = f"{AUDIO_DIR}/step2.mp3"
+FINISH_MP3 = f"{AUDIO_DIR}/complete.mp3"
+RETRY_MP3 = f"{AUDIO_DIR}/retry.mp3"
+SHUTDOWN_MP3 = f"{AUDIO_DIR}/shutdown.mp3"
+
+# Fallback to home dir if audio dir doesn't exist
+if not os.path.exists(AUDIO_DIR):
+    AUDIO_DIR = "/home/orangepi"
+    READY_MP3 = f"{AUDIO_DIR}/ready.mp3"
+    STEP1_MP3 = f"{AUDIO_DIR}/step1.mp3"
+    STEP2_MP3 = f"{AUDIO_DIR}/step2.mp3"
+    FINISH_MP3 = f"{AUDIO_DIR}/complete.mp3"
+    RETRY_MP3 = f"{AUDIO_DIR}/retry.mp3"
+    SHUTDOWN_MP3 = f"{AUDIO_DIR}/shutdown.mp3"
+
 PALERA1N_CMD = "sudo palera1n -l"
-USBMUXD_CMD  = "sudo /usr/sbin/usbmuxd -f -p -v"
-SHUTDOWN     = "/usr/sbin/poweroff"
+MAX_RETRIES = 3
 
-READY_MP3    = f"{AUDIO_PATH}/ready.mp3"
-STEP1_MP3    = f"{AUDIO_PATH}/step1.mp3"
-STEP2_MP3    = f"{AUDIO_PATH}/step2.mp3"
-FINISH_MP3   = f"{AUDIO_PATH}/complete.mp3"
-RETRY_MP3    = f"{AUDIO_PATH}/retry.mp3"
-SHUTDOWN_MP3 = f"{AUDIO_PATH}/shutdown.mp3"
+# ================= UTILITY =================
 
-DFU_WAIT_TIME = 4.5
-COOLDOWN_TIME = 60
-MAX_RETRIES   = 3
-RETRY_AUDIO_DELAY = 2
-
-def safe_kill_process(name):
-    """Kill all processes by name using pgrep and kill PID."""
+def run_cmd(cmd, timeout=10):
+    """Run command and return (success, output)."""
     try:
         result = subprocess.run(
-            ["pgrep", "-f", name],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout
         )
-        if result.stdout:
-            for pid in result.stdout.strip().split('\n'):
-                if pid:
-                    try:
-                        subprocess.run(["sudo", "kill", "-9", pid], 
-                                     stdout=subprocess.DEVNULL,
-                                     stderr=subprocess.DEVNULL)
-                    except:
-                        pass
+        return result.returncode == 0, result.stdout
+    except subprocess.TimeoutExpired:
+        return False, ""
+    except Exception as e:
+        return False, str(e)
+
+
+def kill_process(name):
+    """Kill processes by name."""
+    try:
+        result = subprocess.run(["pgrep", "-f", name], capture_output=True, text=True)
+        for pid in result.stdout.strip().split('\n'):
+            if pid:
+                subprocess.run(["sudo", "kill", "-9", pid], capture_output=True)
     except:
         pass
 
-# ================= CLEANUP =================
-
-def power_off_speaker():
-    log.info("[bt] Powering speaker OFF (cleanup)")
-    try:
-        subprocess.run(
-            ["sudo", SPEAKER_POWER],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception as e:
-        log.error(f"[bt] Failed to power off speaker: {e}")
-
-def hard_exit(reason):
-    log.critical(f"[system] HARD EXIT: {reason}")
-
-    try:
-        safe_kill_process("palera1n")
-        safe_kill_process("usbmuxd")
-    except Exception:
-        pass
-
-    try:
-        power_off_speaker()
-    except Exception:
-        pass
-    
-    # Clean up PID file
-    try:
-        pidfile = "/tmp/autorain.pid"
-        if os.path.exists(pidfile):
-            os.remove(pidfile)
-    except Exception:
-        pass
-
-    log.critical("[system] Exiting now")
-    os._exit(0)
-
-# ================= AUDIO =================
-
-def wait_for_audio_sink(timeout=4):
-    log.info("[audio] Waiting for PulseAudio + Bluetooth sink")
-    start = time.time()
-
-    while time.time() - start < timeout:
-        try:
-            env = os.environ.copy()
-            env["PULSE_SERVER"] = "unix:/run/user/1000/pulse/native"
-            out = subprocess.check_output(
-                ["pactl", "list", "short", "sinks"],
-                stderr=subprocess.DEVNULL,
-                text=True,
-                env=env,
-            )
-            if "bluez_sink" in out:
-                log.info("[audio] Bluetooth sink detected")
-                return True
-        except Exception:
-            pass
-        time.sleep(0.2)
-
-    log.warning("[audio] Timed out waiting for BT sink (continuing anyway)")
-    return False
-
-def set_volume():
-    try:
-        env = os.environ.copy()
-        env["PULSE_SERVER"] = "unix:/run/user/1000/pulse/native"
-        # Set volume specifically for Bluetooth sink if available, otherwise all sinks
-        sinks = subprocess.check_output(["pactl", "list", "short", "sinks"], text=True, env=env)
-        bt_sink = None
-        for line in sinks.strip().split('\n'):
-            if 'bluez' in line:
-                bt_sink = line.split('\t')[0]
-                break
-        
-        if bt_sink:
-            subprocess.run(["pactl", "set-sink-volume", bt_sink, "2%"], 
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
-            log.info(f"[audio] Set Bluetooth sink {bt_sink} to 2%")
-        else:
-            subprocess.run(
-                ["bash", "-c", "pactl list short sinks | awk '{print $1}' | xargs -I{} pactl set-sink-volume {} 2%"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env=env,
-            )
-            log.info("[audio] Set all sinks to 2%")
-    except Exception:
-        pass
-
-def play(mp3, wait_time=None):
-    """Play audio file. If wait_time is specified, block until playback completes OR wait_time expires."""
-    log.info(f"[audio] Playing {os.path.basename(mp3)}")
-    try:
-        env = os.environ.copy()
-        env["PULSE_SERVER"] = "unix:/run/user/1000/pulse/native"
-        if wait_time is not None:
-            # Blocking mode: play file to completion, ensuring at least wait_time total
-            start = time.time()
-            result = subprocess.run(
-                ["mpg123", "-q", mp3],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=wait_time + 10,  # safety margin for long files
-                env=env
-            )
-            elapsed = time.time() - start
-            remaining = wait_time - elapsed
-            if remaining > 0:
-                time.sleep(remaining)
-            log.info(f"[audio] {os.path.basename(mp3)} playback complete (total: {elapsed:.1f}s)")
-        else:
-            # Non-blocking mode: start playback and return immediately
-            # File plays to completion in background
-            subprocess.Popen(
-                ["mpg123", "-q", mp3],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env=env
-            )
-    except subprocess.TimeoutExpired:
-        log.warning(f"[audio] Playback timeout for {os.path.basename(mp3)}")
-    except Exception as e:
-        log.warning(f"[audio] Failed to play {os.path.basename(mp3)}: {e}")
 
 # ================= BLUETOOTH =================
 
-def bt_connected():
-    try:
-        out = subprocess.check_output(
-            ["bluetoothctl", "info", BT_DEVICE],
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-        return "Connected: yes" in out
-    except subprocess.CalledProcessError:
-        return False
+def bt_is_connected():
+    """Check if Bluetooth speaker is connected."""
+    success, output = run_cmd(["bluetoothctl", "info", BT_MAC])
+    return success and "Connected: yes" in output
 
-def bt_device_known():
-    """Check if device is in bluetoothctl devices list (paired/known)"""
-    try:
-        out = subprocess.check_output(
-            ["bluetoothctl", "devices"],
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-        return BT_DEVICE in out
-    except subprocess.CalledProcessError:
-        return False
 
-def power_cycle_speaker():
-    log.info("[bt] Initiating speaker power cycle")
+def bt_connect():
+    """Attempt to connect to Bluetooth speaker with a shorter timeout."""
+    log.info(f"[bt] Connecting to {BT_MAC}...")
     try:
         result = subprocess.run(
-            ["sudo", SPEAKER_POWER],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
+            ["bluetoothctl", "connect", BT_MAC],
+            capture_output=True,
+            text=True,
+            timeout=8  # Wait up to 8 seconds for the connect command
         )
-        if result.returncode != 0:
-            log.error(f"[bt] Speaker power script failed (code {result.returncode}): {result.stderr}")
+        if result.returncode == 0:
+            log.info("[bt] Connect command succeeded")
+            return True
+        elif "already connected" in result.stdout.lower():
+            log.info("[bt] Already connected")
+            return True
+        else:
+            # Log what went wrong for debugging
+            output = result.stdout + result.stderr
+            if "already" in output.lower():
+                log.info("[bt] Speaker already connected")
+                return True
+            log.debug(f"[bt] Connect output: {output.strip()}")
             return False
-        log.info("[bt] Speaker power cycle completed successfully")
+    except subprocess.TimeoutExpired:
+        log.warning("[bt] Connect command timed out (speaker may still be processing)")
+        return False
+    except Exception as e:
+        log.error(f"[bt] Connect error: {e}")
+        return False
+
+
+def bt_power_cycle():
+    """Power cycle the Bluetooth speaker via GPIO 79."""
+    log.info("[bt] Power cycling speaker...")
+    try:
+        subprocess.run(
+            ["sudo", SPEAKER_POWER_SCRIPT],
+            capture_output=True,
+            timeout=10
+        )
+        log.info("[bt] Power cycle complete, waiting for speaker boot...")
+        time.sleep(3)  # Wait for speaker to boot
         return True
     except Exception as e:
-        log.error(f"[bt] Failed to power cycle speaker: {e}")
+        log.error(f"[bt] Power cycle failed: {e}")
         return False
+
+
+def bt_disconnect():
+    """Disconnect from Bluetooth speaker."""
+    try:
+        subprocess.run(
+            ["bluetoothctl", "disconnect", BT_MAC],
+            capture_output=True,
+            timeout=3
+        )
+    except:
+        pass
+
+
+def wait_for_bluetooth():
+    """
+    Block until Bluetooth speaker is connected.
+    
+    Sequence:
+    1. Power cycle speaker to ensure it boots fresh
+    2. Wait for full initialization
+    3. Rapidly attempt connects immediately after boot
+    4. If fails, retry from step 1
+    """
+    # Set volume early to ensure all audio plays at safe level
+    set_volume("2%")
+    
+    log.info("[bt] === Waiting for Bluetooth speaker ===")
+    led_call("boot_bt_waiting")
+    
+    start_time = time.time()
+    cycle_attempt = 0
+    
+    while time.time() - start_time < BT_TIMEOUT:
+        cycle_attempt += 1
+        log.info(f"[bt] Power cycle attempt {cycle_attempt}...")
         
-def wait_for_bt_background():
-     """Background thread function for Bluetooth connection with timeout."""
-     BT_GRACE_PERIOD = 0.2
-     log.info("let bluez settle")
-     time.sleep(BT_GRACE_PERIOD)
-     log.info("[bt] Waiting for Bluetooth speaker connection (background)")
+        # Power cycle the speaker
+        bt_power_cycle()
+        
+        # After power cycle, the speaker is booting
+        # Wait a bit longer for full initialization (speaker-specific timing)
+        log.info("[bt] Waiting for speaker to fully boot...")
+        time.sleep(2)
+        
+        # Now attempt rapid connects while speaker is fresh
+        for connect_attempt in range(1, 5):
+            log.info(f"[bt] Connect attempt {connect_attempt} (after boot {cycle_attempt})...")
+            
+            # Try to connect
+            bt_connect()
+            time.sleep(1)  # Wait for connection to establish
+            
+            # Check if connected
+            if bt_is_connected():
+                log.info("[bt] ✓ Speaker connected!")
+                led_call("boot_bt_connected")
+                return True
+            
+            log.warning(f"[bt] Connect attempt {connect_attempt} failed")
+            
+            # Disconnect before next attempt to clear Bluetooth state
+            if connect_attempt < 4:  # Don't disconnect after last attempt before retry
+                bt_disconnect()
+                time.sleep(0.5)
+        
+        # If all rapid connects failed, try next power cycle
+        log.warning(f"[bt] All connects failed after boot {cycle_attempt}, will retry...")
+        time.sleep(1)
+    
+    log.error(f"[bt] ✗ Failed to connect after {BT_TIMEOUT}s")
+    led_call("palera1n_error")
+    return False
 
-     start_time = time.time()
-     cycled = False
-     max_total_wait = 30  # Allow 30 seconds for background connection attempts
-     speaker_boot_time = 3
-     retry_interval = 0.5
 
-     while True:
-         # Success path - device connected
-         if bt_connected():
-             log.info("[bt] Speaker connected successfully")
-             set_volume()
-             play(READY_MP3, wait_time=2.0)
-             return
+# ================= AUDIO =================
 
-         now = time.time()
-         elapsed = now - start_time
-         
-         # Timeout after max_total_wait - log but don't exit
-         if elapsed >= max_total_wait:
-             log.warning(f"[bt] Background: Could not connect to speaker after {max_total_wait}s")
-             log.warning("[bt] Continuing without speaker - boot sequence can proceed")
-             return
+def get_pulse_socket():
+    """Find PulseAudio socket."""
+    paths = [
+        "/run/user/1000/pulse/native",
+        "/run/pulse/native",
+    ]
+    for p in paths:
+        if os.path.exists(p):
+            return p
+    return paths[0]
 
-         # Check if device is known/paired - if not, power cycle
-         if not cycled:
-             if bt_device_known():
-                 log.info("[bt] Device is known, waiting for auto-connect...")
-                 cycled = True
-                 continue
-             else:
-                 log.info("[bt] Device not in bluetoothctl devices, power cycling speaker")
-                 if power_cycle_speaker():
-                     cycled = True
-                     log.info(f"[bt] Waiting {speaker_boot_time}s for speaker to boot")
-                     time.sleep(speaker_boot_time)
-                     continue
-                 else:
-                     log.error("[bt] Power cycle failed - waiting for auto-connect anyway")
-                     cycled = True
-                     continue
 
-         # Regular check interval
-         time.sleep(retry_interval)
+def set_volume(level="2%"):
+    """Set audio volume."""
+    try:
+        env = os.environ.copy()
+        env["PULSE_SERVER"] = f"unix:{get_pulse_socket()}"
+        subprocess.run(
+            ["pactl", "set-sink-volume", "@DEFAULT_SINK@", level],
+            env=env,
+            capture_output=True,
+            timeout=2
+        )
+    except:
+        pass
 
-def wait_for_bt():
-     """Start Bluetooth connection in background thread and return immediately."""
-     log.info("[bt] Starting Bluetooth connection in background")
-     bt_thread = threading.Thread(target=wait_for_bt_background, daemon=True)
-     bt_thread.start()
-     # Don't wait for it - let it run in background
-     log.info("[bt] Continuing with boot sequence while Bluetooth connects in background")
-     return True
+
+def play_audio(mp3_path, wait=True, wait_time=None):
+    """Play audio file via mpg123."""
+    if not os.path.exists(mp3_path):
+        log.warning(f"[audio] File not found: {mp3_path}")
+        return
+    
+    log.info(f"[audio] Playing {os.path.basename(mp3_path)}")
+    
+    try:
+        env = os.environ.copy()
+        env["PULSE_SERVER"] = f"unix:{get_pulse_socket()}"
+        
+        if wait:
+            start = time.time()
+            subprocess.run(
+                ["mpg123", "-q", mp3_path],
+                env=env,
+                timeout=30
+            )
+            # If wait_time specified, ensure we wait at least that long
+            if wait_time:
+                elapsed = time.time() - start
+                if elapsed < wait_time:
+                    time.sleep(wait_time - elapsed)
+        else:
+            subprocess.Popen(
+                ["mpg123", "-q", mp3_path],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+    except Exception as e:
+        log.warning(f"[audio] Playback error: {e}")
+
 
 # ================= USBMUXD =================
 
-def kill_usbmuxd():
-    log.info("[usb] Killing any existing usbmuxd")
-    safe_kill_process("usbmuxd")
-    
 def start_usbmuxd():
-    log.info("[usb] Starting usbmuxd (foreground)")
+    """Start usbmuxd for iOS device communication."""
+    log.info("[usb] Stopping existing usbmuxd...")
+    kill_process("usbmuxd")
+    time.sleep(0.5)
+    
+    log.info("[usb] Starting usbmuxd...")
     subprocess.Popen(
         ["sudo", "/usr/sbin/usbmuxd", "-f", "-p", "-v"],
         stdout=open("/home/orangepi/autorain-usbmuxd.txt", "w"),
         stderr=subprocess.STDOUT,
-        start_new_session=True,
+        start_new_session=True
     )
-    # wait until socket exists (reduced timeout)
-    timeout = 2
-    while timeout > 0 and not os.path.exists("/var/run/usbmuxd"):
+    
+    # Wait for socket
+    for _ in range(20):
+        if os.path.exists("/var/run/usbmuxd"):
+            log.info("[usb] usbmuxd ready")
+            return True
         time.sleep(0.1)
-        timeout -= 0.1
-    log.info("[usb] usbmuxd ready")
+    
+    log.warning("[usb] usbmuxd socket not found")
+    return False
+
 
 # ================= PALERA1N =================
 
 def run_palera1n():
-    log.info("[palera1n] Launching palera1n")
-    child = pexpect.spawn(PALERA1N_CMD, encoding="utf-8", timeout=None)
-    child.logfile = sys.stdout
-    return child
-
-# ================= MAIN =================
-
-def check_already_running():
-    """Check if autoRain is already running and exit if so."""
-    pidfile = "/tmp/autorain.pid"
+    """Run palera1n with pexpect, handling all stages."""
+    log.info("[palera1n] Starting palera1n...")
+    led_call("boot_ready")
     
-    # Check PID file
-    if os.path.exists(pidfile):
-        try:
-            with open(pidfile, 'r') as f:
-                pid = int(f.read().strip())
-            # Check if process with this PID exists and is autoRain
+    retry_count = 0
+    
+    while retry_count <= MAX_RETRIES:
+        child = pexpect.spawn(PALERA1N_CMD, encoding="utf-8", timeout=None)
+        child.logfile = sys.stdout
+        
+        while True:
             try:
-                with open(f'/proc/{pid}/cmdline', 'r') as f:
-                    cmdline = f.read()
-                if 'autoRain.py' in cmdline:
-                    log.critical(f"[system] autoRain already running (PID: {pid}) - exiting")
-                    os._exit(1)
-            except (FileNotFoundError, ProcessLookupError, ValueError):
-                # Process doesn't exist, remove stale PID file
-                os.remove(pidfile)
-        except (ValueError, IOError):
-            pass
+                idx = child.expect([
+                    r"Waiting for devices",           # 0
+                    r"Entering recovery mode",        # 1
+                    r"Press Enter when ready for DFU",# 2
+                    r"Booting Kernel",                # 3
+                    r"Found PongoOS USB Device",      # 4
+                    r"Timed out waiting for download mode",  # 5
+                    r"Entering normal mode",          # 6
+                    pexpect.EOF,                      # 7
+                ], timeout=300)
+                
+                if idx == 0:
+                    log.info("[palera1n] Waiting for device...")
+                    led_call("palera1n_waiting")
+                    play_audio(READY_MP3, wait_time=2.5)
+                
+                elif idx == 1:
+                    log.info("[palera1n] Recovery mode - device detected!")
+                    led_call("palera1n_device_detected")  # Speed up chase!
+                    child.sendline("\r")
+                
+                elif idx == 2:
+                    log.info("[palera1n] DFU mode instructions")
+                    led_call("palera1n_dfu_step1")
+                    play_audio(STEP1_MP3, wait_time=5)
+                    child.sendline("")
+                    led_call("palera1n_dfu_step2")
+                    play_audio(STEP2_MP3, wait_time=10)
+                
+                elif idx in (3, 4):
+                    log.info("[palera1n] Kernel booting - SUCCESS!")
+                    led_call("palera1n_booting")
+                    play_audio(FINISH_MP3)
+                    led_call("palera1n_complete")
+                    return True
+                
+                elif idx == 5:
+                    log.warning("[palera1n] DFU timeout - retrying")
+                    led_call("palera1n_error")
+                    play_audio(RETRY_MP3)
+                    retry_count += 1
+                    child.close(force=True)
+                    break
+                
+                elif idx == 6:
+                    log.info("[palera1n] Normal mode - will reboot to recovery")
+                    led_call("palera1n_device_detected")
+                    continue
+                
+                elif idx == 7:
+                    log.error("[palera1n] Unexpected exit")
+                    led_call("palera1n_error")
+                    retry_count += 1
+                    break
+                    
+            except pexpect.TIMEOUT:
+                log.error("[palera1n] Timeout waiting for device")
+                retry_count += 1
+                child.close(force=True)
+                break
     
-    # Write our PID to file
-    with open(pidfile, 'w') as f:
-        f.write(str(os.getpid()))
+    log.critical("[palera1n] Max retries exceeded")
+    play_audio(SHUTDOWN_MP3)
+    return False
 
-def cleanup_pidfile():
-    """Clean up PID file on exit."""
+
+# ================= CLEANUP =================
+
+def cleanup():
+    """Cleanup on exit."""
+    log.info("[system] Cleanup...")
+    
+    # Remove PID file
     try:
         pidfile = "/tmp/autorain.pid"
         if os.path.exists(pidfile):
             os.remove(pidfile)
-            log.info("[system] PID file cleaned up")
-    except Exception:
+    except:
         pass
+    
+    # Stop LEDs
+    led_call("cleanup")
+    
+    # Kill processes
+    kill_process("palera1n")
+    kill_process("usbmuxd")
+
+
+def check_already_running():
+    """Prevent multiple instances."""
+    pidfile = "/tmp/autorain.pid"
+    
+    if os.path.exists(pidfile):
+        try:
+            with open(pidfile) as f:
+                pid = int(f.read().strip())
+            # Check if process exists
+            os.kill(pid, 0)
+            log.critical(f"[system] Already running (PID {pid})")
+            sys.exit(1)
+        except (ProcessLookupError, ValueError):
+            os.remove(pidfile)
+    
+    # Write our PID
+    with open(pidfile, 'w') as f:
+        f.write(str(os.getpid()))
+
+
+# ================= MAIN =================
 
 def main():
-    log.info("===== autorain boot sequence start =====")
+    log.info("=" * 50)
+    log.info("autoRain starting")
+    log.info("=" * 50)
     
-    # Register cleanup function
-    atexit.register(cleanup_pidfile)
-    
-    # Check if already running
+    atexit.register(cleanup)
     check_already_running()
-
-    wait_for_bt()
     
-    # Parallelize audio sink check and usbmuxd startup
-    audio_thread = threading.Thread(target=wait_for_audio_sink, daemon=True)
-    audio_thread.start()
+    # Start LED controller and show boot animation
+    if LED_AVAILABLE and led is not None:
+        led.start_pwm()
+        time.sleep(0.2)
+        led.boot_starting()
     
-    kill_usbmuxd()
-    muxd = start_usbmuxd()
+    # Wait for Bluetooth speaker (BLOCKING)
+    if not wait_for_bluetooth():
+        log.critical("[system] Cannot proceed without Bluetooth audio")
+        log.info("[system] Will keep retrying...")
+        while not wait_for_bluetooth():
+            time.sleep(5)
     
-    # Wait for audio thread to complete with shorter timeout
-    audio_thread.join(timeout=3)
+    # Set up audio
+    set_volume("2%")
     
-    # Set volume BEFORE playing any audio
-    set_volume()
+    # Start usbmuxd
+    start_usbmuxd()
+    
+    # Run palera1n
+    success = run_palera1n()
+    
+    if success:
+        log.info("[system] Jailbreak complete!")
+    else:
+        log.error("[system] Jailbreak failed")
+    
+    cleanup()
 
-    retry_count = 0
-
-    while retry_count <= MAX_RETRIES:
-        child = run_palera1n()
-
-        while True:
-            idx = child.expect([
-                r"Waiting for devices",
-                r"Entering recovery mode",
-                r"Press Enter when ready for DFU",
-                r"Booting Kernel",
-                r"Found PongoOS USB Device",
-                r"Timed out waiting for download mode",
-                r"Entering normal mode",
-                pexpect.EOF,
-            ])
-
-            if idx == 0:
-                log.info("[palera1n] Waiting for device")
-                play(READY_MP3, wait_time=2.5)
-            elif idx == 1:
-                log.info("[palera1n] Recovery mode detected - advancing")
-                child.sendline("\r")
-            elif idx == 2:
-                log.info("[palera1n] DFU step")
-                play(STEP1_MP3, wait_time=5)  # 5 sec total: hold home+power, then release power
-                child.sendline("")  # simulate releasing power button after 5 seconds
-                play(STEP2_MP3, wait_time=10)  # 10 sec total: hold home button for countdown
-
-            elif idx in (3, 4):
-                log.info("[palera1n] Kernel boot detected")
-                play(FINISH_MP3)
-                hard_exit("jailbreak complete")
-
-            elif idx == 5:
-                log.warning("[palera1n] Download mode timeout — retrying")
-                play(RETRY_MP3)
-                retry_count += 1
-                child.close(force=True)
-                break
-
-            elif idx == 6:
-                log.info("[palera1n] Device in normal mode - will reboot to recovery")
-                continue
-
-            elif idx == 7:
-                log.error("[palera1n] palera1n exited unexpectedly")
-                retry_count += 1
-                break
-
-        if retry_count > MAX_RETRIES:
-            log.critical("[system] Max retries reached — shutting down")
-            play(SHUTDOWN_MP3)
-            hard_exit("max retries")
 
 if __name__ == "__main__":
     main()
