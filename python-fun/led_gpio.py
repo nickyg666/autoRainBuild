@@ -7,20 +7,20 @@ import time
 
 class Pin:
     """Named GPIO pins for LEDs"""
-    # LED 1 - MIDDLE
-    Led1Red = 230
-    Led1Green = 71
-    Led1Blue = 74
-    
-    # LED 2 - CLOSEST TO ETH
-    Led2Red = 233
-    Led2Green = 72
-    Led2Blue = 75
-    
+    # LED 1 - CLOSEST TO ETH
+    Led1Red = 71
+    Led1Green = 232
+    Led1Blue = 75
+
+    # LED 2 - MIDDLE
+    Led2Red = 230
+    Led2Green = 74
+    Led2Blue = 233
+
     # LED 3 - FARTHEST FROM ETH
     Led3Red = 69
-    Led3Green = 73
-    Led3Blue = 233
+    Led3Green = 72
+    Led3Blue = 73
 
     @classmethod
     def all_leds(cls):

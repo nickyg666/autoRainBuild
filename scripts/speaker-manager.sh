@@ -87,19 +87,49 @@ is_speaker_connected() {
     return 1
 }
 
-# Power cycle the speaker
+# Check if speaker is Bluetooth visible (paired or connectable)
+is_speaker_visible() {
+    if bluetoothctl devices 2>/dev/null | grep -q "$SPEAKER_MAC"; then
+        return 0
+    fi
+    return 1
+}
+
+# Power toggle the speaker (only if not visible)
 power_cycle_speaker() {
-    log "Power cycling speaker via GPIO"
+    local cooldown_file="/tmp/speaker-power-cooldown"
+    local cooldown_seconds=30
+    
+    log "Checking if speaker needs power toggle"
+    
+    # Check cooldown
+    if [ -f "$cooldown_file" ]; then
+        local last_toggle=$(cat "$cooldown_file")
+        local current_time=$(date +%s)
+        local elapsed=$((current_time - last_toggle))
+        
+        if [ $elapsed -lt $cooldown_seconds ]; then
+            log "In cooldown period (${elapsed}s elapsed, waiting to ${cooldown_seconds}s)"
+            return 1
+        fi
+    fi
+    
+    # Only toggle if speaker is not Bluetooth visible
+    if is_speaker_visible; then
+        log "Speaker is Bluetooth visible - skipping power toggle"
+        return 0
+    fi
+    
+    log "Speaker not visible - toggling power (hold for 3s)"
     
     if [ -x "$SPEAKER_POWER" ]; then
-        # Toggle power off
         sudo "$SPEAKER_POWER" 2>&1 | tee -a "$LOG_FILE"
-        sleep 1
         
-        # Toggle power on
-        sudo "$SPEAKER_POWER" 2>&1 | tee -a "$LOG_FILE"
-        log "Waiting 5 seconds for speaker to power up and become discoverable"
-        sleep 5
+        # Set cooldown
+        date +%s > "$cooldown_file"
+        
+        log "Waiting 10 seconds for speaker to boot and become discoverable"
+        sleep 10
     else
         log "ERROR: speaker-power.sh not found at $SPEAKER_POWER"
         return 1
@@ -198,14 +228,8 @@ setup_speaker() {
         return 0
     fi
     
-    # Power cycle speaker
-    power_cycle_speaker
-    
-    # Wait for speaker to be ready
-    log "Waiting 2 seconds before connection attempt"
-    sleep 2
-    
-    # Try to connect
+    # Skip power cycling - autoRain.py handles that
+    # Just try to connect directly
     if connect_speaker; then
         # Connection succeeded, wait for audio sink
         log "Waiting for audio sink to appear..."
@@ -246,12 +270,9 @@ monitor_speaker() {
     while true; do
         if ! check_headphone && ! is_speaker_connected; then
             log "Speaker disconnected - attempting reconnection"
-            if [ -x "$SPEAKER_POWER" ]; then
-                power_cycle_speaker
-                sleep 2
-                connect_speaker
-                auto_select_audio_output
-            fi
+            # Just try to reconnect - don't power cycle (autoRain handles that)
+            connect_speaker
+            auto_select_audio_output
         fi
         
         # Re-check audio routing in case headphones were plugged/unplugged

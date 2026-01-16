@@ -1,30 +1,18 @@
 #!/bin/bash
-# Toggle speaker power
-# Used when no bluetooth device is detected
+# speaker-power.sh - Toggle speaker power button
+# Hold low for 3 seconds to toggle power, then release high
 
-SPEAKER_POWER_PIN=""  # GPIO pin for speaker power (configure for your hardware)
+BIN="/usr/bin/gpioset"
+GPIOCHIP="gpiochip1"
+LINE="79"
 
-if [ -z "$SPEAKER_POWER_PIN" ]; then
-    echo "Speaker power management requires GPIO pin configuration"
-    echo "Edit $0 and set SPEAKER_POWER_PIN"
-    exit 1
-fi
+log() {
+    echo "$(date '+%F %T') [speaker-power] $*" >> /home/orangepi/speaker-power.log
+}
 
-# Export GPIO pin
-echo "$SPEAKER_POWER_PIN" > /sys/class/gpio/export 2>/dev/null
-
-# Set direction to output
-echo "out" > /sys/class/gpio/gpio$SPEAKER_POWER_PIN/direction
-
-# Toggle power
-CURRENT_STATE=$(cat /sys/class/gpio/gpio$SPEAKER_POWER_PIN/value 2>/dev/null || echo "0")
-
-if [ "$CURRENT_STATE" = "1" ]; then
-    echo "Turning speakers OFF"
-    echo "0" > /sys/class/gpio/gpio$SPEAKER_POWER_PIN/value
-else
-    echo "Turning speakers ON"
-    echo "1" > /sys/class/gpio/gpio$SPEAKER_POWER_PIN/value
-fi
-
-exit 0
+# Simple power toggle: press and hold for 3 seconds
+log "Pressing power button (hold for 3s)..."
+$BIN "$GPIOCHIP" "$LINE=0"
+sleep 3
+$BIN "$GPIOCHIP" "$LINE=1"
+log "Power toggle complete"
