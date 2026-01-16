@@ -1,0 +1,15 @@
+[Unit]
+Description=Speaker Power Toggle on Shutdown/Reboot
+Before=shutdown.target reboot.target poweroff.target halt.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/home/orangepi/autoRain/scripts/shutdown-speaker-power.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=shutdown-speaker
+
+[Install]
+WantedBy=shutdown.target reboot.target poweroff.target halt.target
